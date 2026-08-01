@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# cdhash-verify — prove the app you are RUNNING is the artifact you BUILT.
+#
+# Version strings lie (two different binaries can carry the same build number).
+# File mtimes lie (a copy refreshes them). The only identity a macOS binary has
+# is its code-directory hash. This tool compares the CDHash of a running app
+# against the CDHash of a candidate .app on disk and gives a one-word verdict.
+#
+# Usage:
+#   cdhash-verify <pid | bundle-id> <path/to/Candidate.app>
+#
+# Examples:
+#   cdhash-verify com.example.myapp ./build/Release/MyApp.app
+#   cdhash-verify 48221 /Applications/MyApp.app
+#
+# Exit codes: 0 = MATCH, 1 = STALE (hashes differ), 2 = usage/lookup error.
+set -euo pipefail
+
+die() { printf 'error: %s\n' "$*" >&2; exit 2; }
+
+[[ $# -eq 2 ]] || {
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+
+target="$1"
+candidate="$2"
+
+[[ -d "$candidate" ]] || die "candidate bundle not found: $candidate"
+
+# --- resolve the running process -------------------------------------------
+if [[ "$target" =~ ^[0-9]+$ ]]; then
+  pid="$target"
+  kill -0 "$pid" 2>/dev/null || die "no running process with pid $pid"
+else
+  pid="$(osascript -e "tell application \"System Events\" to get unix id of (first process whose bundle identifier is \"$target\")" 2>/dev/null)" \
+    || die "no running process with bundle id $target"
+fi
+
+exe="$(ps -o comm= -p "$pid" | sed 's/^ *//')"
+[[ -n "$exe" ]] || die "could not resolve executable for pid $pid"
+
+# Walk up from .../Foo.app/Contents/MacOS/foo to the bundle root.
+running_bundle="${exe%/Contents/MacOS/*}"
+[[ "$running_bundle" == *.app ]] || running_bundle="$exe"
+
+# --- CDHash of the RUNNING code --------------------------------------------
+# launchctl procinfo reads the live process (survives the on-disk bundle being
+# swapped after launch). Fall back to codesign on the executable path, which
+# reflects DISK, not memory — flagged when used.
+running_hash="$(launchctl procinfo "$pid" 2>/dev/null | awk '/CDHash/ {print tolower($NF); exit}')" || true
+source_of_truth="memory (launchctl procinfo)"
+if [[ -z "${running_hash:-}" ]]; then
+  running_hash="$(codesign -dvvv "$running_bundle" 2>&1 | awk -F= '/^CDHash/{print tolower($2); exit}')" || true
+  source_of_truth="disk at launch path (codesign) — bundle may have been replaced after launch"
+fi
+[[ -n "${running_hash:-}" ]] || die "could not read CDHash of running process $pid"
+
+# --- CDHash of the CANDIDATE artifact --------------------------------------
+candidate_hash="$(codesign -dvvv "$candidate" 2>&1 | awk -F= '/^CDHash/{print tolower($2); exit}')" || true
+[[ -n "${candidate_hash:-}" ]] || die "could not read CDHash of $candidate (is it signed?)"
+
+ver() { # bundle -> "short (build)"
+  local p="$1/Contents/Info.plist"
+  [[ -f "$p" ]] || { echo "?"; return; }
+  printf '%s (%s)' \
+    "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$p" 2>/dev/null || echo '?')" \
+    "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$p" 2>/dev/null || echo '?')"
+}
+
+printf 'running    %s  pid=%s  version=%s\n' "$running_hash" "$pid" "$(ver "$running_bundle")"
+printf '           source: %s\n' "$source_of_truth"
+printf 'candidate  %s  %s  version=%s\n' "$candidate_hash" "$candidate" "$(ver "$candidate")"
+
+if [[ "$running_hash" == "$candidate_hash" ]]; then
+  printf 'verdict    MATCH — the running code IS this artifact\n'
+  exit 0
+else
+  printf 'verdict    STALE — the running code is NOT this artifact\n'
+  exit 1
+fi
