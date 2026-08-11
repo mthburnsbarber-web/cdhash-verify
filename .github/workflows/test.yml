@@ -1,0 +1,27 @@
+name: Test macOS verifier
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse script
+        run: bash -n ./cdhash-verify
+      - name: Verify usage failure
+        run: |
+          set +e
+          output="$(./cdhash-verify 2>&1)"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          printf '%s\n' "$output" | grep -q 'Usage:'
