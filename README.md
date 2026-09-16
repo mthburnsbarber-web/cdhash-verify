@@ -48,6 +48,15 @@ into CI or a deploy script:
 macOS. Uses only system tools: `codesign`, `launchctl`, `PlistBuddy`,
 `osascript`. No dependencies.
 
+## Free templates
+
+- [Stale-binary release checklist](docs/mac-release-stale-binary-checklist.md)
+  — identity proof steps before calling a macOS fix installed.
+- [Release gate script](examples/release-gate.sh) — copy into a local release
+  lane.
+- [GitHub Action template](examples/github-action.yml) — candidate-signature
+  CI starter.
+
 ## License
 
 MIT

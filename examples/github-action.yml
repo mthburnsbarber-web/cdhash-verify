@@ -1,0 +1,15 @@
+# Template only. GitHub-hosted macOS runners can verify a candidate bundle
+# after a build, but they cannot prove a customer machine is running it.
+name: cdhash-verify
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-candidate-signature:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build.sh
+      - run: codesign -dvvv ./build/Release/MyApp.app
+      - run: bash -n ./cdhash-verify
